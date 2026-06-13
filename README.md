@@ -64,6 +64,10 @@ The Supervisor implements the **fault-tolerance layer** in the SuperInstance act
 
 See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md).
 
+**Restart budget and rate limiting:** The max-restart threshold implements a leaky-bucket rate limiter: restarts are allowed at rate 1 per (max_restarts × mean_time_between_failures). Once the bucket is full (max_restarts exceeded), all subsequent failures escalate. This prevents the degenerate case where a persistent bug causes infinite restart cycles, consuming CPU and memory without making progress — a pattern Erlang calls "the node of the living dead."
+
+**Hierarchical escalation semantics:** When Escalate is returned, the parent supervisor itself must decide: restart the failing supervisor, resume it, or escalate further up the tree. This continues until the root supervisor (usually the ActorSystem itself) is reached. If the root escalates, the system shuts down — the ultimate safety valve.
+
 ## References
 
 1. Armstrong, J. (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD Thesis, KTH. Chapter 4: Supervision Trees.
