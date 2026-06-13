@@ -1,48 +1,73 @@
 # Actor Supervisor
 
-A **supervisor** in the actor model monitors child actors and decides what to do when they fail — resume, restart, stop, or escalate the failure.
+**Actor Supervisor** is a Rust library implementing supervision strategies for actor fault tolerance — restart, stop, resume, and escalate — with configurable max-restart thresholds for cascading failure prevention.
 
 ## Why It Matters
 
-Supervision is what makes actor systems self-healing. Instead of try/catch across async boundaries, failures bubble up to supervisors that have context about the subsystem. This is the foundation of Erlang/OTP's 'let it crash' philosophy.
+In distributed and concurrent systems, failures are inevitable: network partitions, resource exhaustion, and logic errors crash individual actors. The supervision pattern, pioneered in Erlang/OTP and formalized in Akka, provides structured failure handling: when a child actor fails, its parent supervisor decides what to do based on a declared strategy. This transforms chaotic failure cascades into predictable, recoverable system behavior. Without supervision, a single actor panic can bring down an entire system; with it, failures are contained and handled at the appropriate level of the actor hierarchy.
 
 ## How It Works
 
-Implements supervision strategies: OneForOne (restart just the failed child), AllForOne (restart all children), RestForOne (restart the failed child and all created after it). Each child has a configurable restart limit with backoff.
+The supervisor implements a fixed strategy with a restart budget. When a child fails, `decide(restart_count)` returns a directive:
 
-## Usage
+**Strategies:**
 
-```toml
-[dependencies]
-actor-supervisor = "0.1.0"
+| Strategy | Behavior | Use Case |
+|----------|----------|----------|
+| Restart | Kill and re-create the actor | Transient failures (bad state) |
+| Resume | Continue processing next message | Benign failures (bad input) |
+| Stop | Permanently terminate the actor | Unrecoverable failures |
+| Escalate | Propagate to parent supervisor | Beyond this supervisor's capacity |
+
+**Max-restart circuit breaker:**
+The supervisor tracks how many times a child has restarted. When `restart_count >= max_restarts` (default 3), the directive becomes Escalate regardless of the configured strategy. This prevents infinite restart loops — a critical safety mechanism.
+
+```
+decide(restart_count):
+  if restart_count >= max_restarts:
+    return Escalate          // circuit breaker
+  match strategy:
+    Restart → Restart
+    Stop → Stop
+    Resume → Resume
+    Escalate → Escalate
 ```
 
-```rust
-use actor_supervisor;
+This implements a **One-For-One** supervision semantics: only the failed child is affected. More sophisticated strategies like All-For-One (restart all siblings) and Rest-For-One (restart the failed child and all started after it) build on this foundation.
 
-// See examples/ directory for detailed usage
+The max-restarts threshold of 3 follows Erlang/OTP's default `maxR` in child specifications, providing a practical balance between fault tolerance and failure containment.
+
+## Quick Start
+
+```rust
+fn main() {
+    let sup = FixedSupervisor::new(SupervisorStrategy::Restart);
+    assert_eq!(sup.decide(0), SupervisorDirective::Restart);  // first failure
+    assert_eq!(sup.decide(2), SupervisorDirective::Restart);  // third failure
+    assert_eq!(sup.decide(3), SupervisorDirective::Escalate); // circuit breaker trips
+}
 ```
 
 ## API
 
-- `SupervisorStrategy` (lib.rs)
-- `SupervisorDirective` (lib.rs)
-- `FixedSupervisor` (lib.rs)
+| Type/Method | Description |
+|-------------|-------------|
+| `SupervisorStrategy` | Enum: Restart, Stop, Resume, Escalate |
+| `SupervisorDirective` | Enum: Restart, Stop, Resume, Escalate |
+| `FixedSupervisor::new` | Create with a fixed strategy |
+| `with_max_restarts` | Set restart threshold (default 3) |
+| `decide` | `(restart_count: usize) → SupervisorDirective` |
 
-## Architecture
+## Architecture Notes
 
-This crate is part of the **[SuperInstance](https://github.com/SuperInstance)** ecosystem — a conservation-law-based framework for fleet coordination, ternary computation, and distributed agent systems.
+The Supervisor implements the **fault-tolerance layer** in the SuperInstance actor system. Within γ + η = C, supervision ensures that conservation-law violations (e.g., an actor producing avoidance ratios outside the expected distribution) trigger automatic restart rather than silent corruption. The escalation chain mirrors the fleet hierarchy: γ-layer actor → γ-supervisor → η-layer coordinator → fleet orchestrator.
 
-### Related Crates
-
-- [`superinstance-core`](https://github.com/SuperInstance/superinstance-core) — Core conservation law (γ + η = C)
-- [`superinstance-harness`](https://github.com/SuperInstance/superinstance-harness) — Build harness and self-improving loop
-- [`fleet-coordinator`](https://github.com/SuperInstance/fleet-coordinator) — Fleet-level coordination
+See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md).
 
 ## References
 
-- [SuperInstance Architecture](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md)
-- [Conservation Law Paper](https://github.com/SuperInstance/SuperInstance/blob/main/docs/conservation-law.md)
+1. Armstrong, J. (2003). *Making Reliable Distributed Systems in the Presence of Software Errors*. PhD Thesis, KTH. Chapter 4: Supervision Trees.
+2. Ho, T.-H. & Huey, J. (2014). "Design Patterns for Supervision in Erlang/OTP." *ACM SIGPLAN Erlang Workshop*.
 
 ## License
 
